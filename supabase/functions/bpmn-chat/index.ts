@@ -1,4 +1,4 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+/// <reference types="https://esm.sh/@supabase/functions-js/src/edge-runtime.d.ts" />
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -69,20 +69,58 @@ When generating BPMN, use this structure:
 
 Always wrap generated BPMN XML in \`\`\`xml code blocks.`;
 
-serve(async (req) => {
+Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
     const { messages } = await req.json();
+
+    // Check for Azure OpenAI configuration first
+    const azureEndpoint = Deno.env.get("AZURE_OPENAI_ENDPOINT");
+    const azureApiKey = Deno.env.get("AZURE_OPENAI_API_KEY");
+    const azureDeployment = Deno.env.get("AZURE_OPENAI_DEPLOYMENT_NAME");
+
+    if (azureEndpoint && azureApiKey && azureDeployment) {
+      // Use Azure OpenAI
+      console.log("Using Azure OpenAI for BPMN chat");
+      const azureUrl = `${azureEndpoint}/openai/deployments/${azureDeployment}/chat/completions?api-version=2024-02-15-preview`;
+
+      const response = await fetch(azureUrl, {
+        method: "POST",
+        headers: {
+          "api-key": azureApiKey,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          messages: [{ role: "system", content: SYSTEM_PROMPT }, ...messages],
+          stream: true,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("Azure OpenAI error:", response.status, errorText);
+        return new Response(
+          JSON.stringify({ error: "Azure OpenAI request failed" }),
+          { status: response.status, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      return new Response(response.body, {
+        headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
+      });
+    }
+
+    // Fallback to Lovable AI
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     
     if (!LOVABLE_API_KEY) {
-      throw new Error("LOVABLE_API_KEY is not configured");
+      throw new Error("No AI provider configured. Add AZURE_OPENAI_* secrets or use Lovable AI.");
     }
 
-    console.log("Processing BPMN chat request with", messages.length, "messages");
+    console.log("Using Lovable AI for BPMN chat with", messages.length, "messages");
 
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
