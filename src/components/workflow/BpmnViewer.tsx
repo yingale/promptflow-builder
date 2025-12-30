@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Download, ZoomIn, ZoomOut, Maximize2, Edit3, Eye } from 'lucide-react';
+import { Download, ZoomIn, ZoomOut, Maximize2, Edit3, Eye, Undo, Redo } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -13,8 +13,10 @@ interface BpmnViewerProps {
 export const BpmnViewer = ({ xml, onXmlChange, className }: BpmnViewerProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<any>(null);
-  const [isEditing, setIsEditing] = useState(false);
+  const [isEditing, setIsEditing] = useState(true); // Start in edit mode
   const [isLoading, setIsLoading] = useState(true);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
 
   useEffect(() => {
     const loadBpmn = async () => {
@@ -23,7 +25,7 @@ export const BpmnViewer = ({ xml, onXmlChange, className }: BpmnViewerProps) => 
       try {
         setIsLoading(true);
         
-        // Dynamically import bpmn-js
+        // Dynamically import bpmn-js Modeler
         const BpmnJS = (await import('bpmn-js/lib/Modeler')).default;
         
         // Clean up previous instance
@@ -31,7 +33,7 @@ export const BpmnViewer = ({ xml, onXmlChange, className }: BpmnViewerProps) => 
           viewerRef.current.destroy();
         }
 
-        // Create new modeler
+        // Create new modeler with full editing capabilities
         viewerRef.current = new BpmnJS({
           container: containerRef.current,
           keyboard: { bindTo: document },
@@ -42,6 +44,13 @@ export const BpmnViewer = ({ xml, onXmlChange, className }: BpmnViewerProps) => 
         // Fit to viewport
         const canvas = viewerRef.current.get('canvas');
         canvas.zoom('fit-viewport');
+
+        // Setup command stack listener for undo/redo state
+        const commandStack = viewerRef.current.get('commandStack');
+        commandStack.on('changed', () => {
+          setCanUndo(commandStack.canUndo());
+          setCanRedo(commandStack.canRedo());
+        });
         
         setIsLoading(false);
       } catch (error) {
@@ -59,6 +68,17 @@ export const BpmnViewer = ({ xml, onXmlChange, className }: BpmnViewerProps) => 
       }
     };
   }, [xml]);
+
+  // Update container class when edit mode changes
+  useEffect(() => {
+    if (containerRef.current) {
+      if (isEditing) {
+        containerRef.current.classList.remove('view-mode');
+      } else {
+        containerRef.current.classList.add('view-mode');
+      }
+    }
+  }, [isEditing]);
 
   const handleZoomIn = () => {
     if (viewerRef.current) {
@@ -81,6 +101,20 @@ export const BpmnViewer = ({ xml, onXmlChange, className }: BpmnViewerProps) => 
     }
   };
 
+  const handleUndo = () => {
+    if (viewerRef.current) {
+      const commandStack = viewerRef.current.get('commandStack');
+      commandStack.undo();
+    }
+  };
+
+  const handleRedo = () => {
+    if (viewerRef.current) {
+      const commandStack = viewerRef.current.get('commandStack');
+      commandStack.redo();
+    }
+  };
+
   const handleDownload = async () => {
     if (!viewerRef.current) return;
     
@@ -100,17 +134,20 @@ export const BpmnViewer = ({ xml, onXmlChange, className }: BpmnViewerProps) => 
     }
   };
 
-  const toggleEditMode = async () => {
-    if (isEditing && viewerRef.current && onXmlChange) {
-      try {
-        const { xml: updatedXml } = await viewerRef.current.saveXML({ format: true });
-        onXmlChange(updatedXml);
-        toast.success('Changes saved');
-      } catch (error) {
-        console.error('Failed to save changes:', error);
-        toast.error('Failed to save changes');
-      }
+  const handleSaveChanges = async () => {
+    if (!viewerRef.current || !onXmlChange) return;
+    
+    try {
+      const { xml: updatedXml } = await viewerRef.current.saveXML({ format: true });
+      onXmlChange(updatedXml);
+      toast.success('Changes saved');
+    } catch (error) {
+      console.error('Failed to save changes:', error);
+      toast.error('Failed to save changes');
     }
+  };
+
+  const toggleEditMode = () => {
     setIsEditing(!isEditing);
   };
 
@@ -127,15 +164,38 @@ export const BpmnViewer = ({ xml, onXmlChange, className }: BpmnViewerProps) => 
       {/* Toolbar */}
       <div className="flex items-center justify-between gap-2 p-2 border-b border-border bg-muted/30">
         <div className="flex items-center gap-1">
-          <Button size="icon" variant="ghost" onClick={handleZoomOut}>
+          <Button size="icon" variant="ghost" onClick={handleZoomOut} title="Zoom Out">
             <ZoomOut className="h-4 w-4" />
           </Button>
-          <Button size="icon" variant="ghost" onClick={handleZoomIn}>
+          <Button size="icon" variant="ghost" onClick={handleZoomIn} title="Zoom In">
             <ZoomIn className="h-4 w-4" />
           </Button>
-          <Button size="icon" variant="ghost" onClick={handleFitViewport}>
+          <Button size="icon" variant="ghost" onClick={handleFitViewport} title="Fit to Screen">
             <Maximize2 className="h-4 w-4" />
           </Button>
+          {isEditing && (
+            <>
+              <div className="w-px h-6 bg-border mx-1" />
+              <Button 
+                size="icon" 
+                variant="ghost" 
+                onClick={handleUndo} 
+                disabled={!canUndo}
+                title="Undo"
+              >
+                <Undo className="h-4 w-4" />
+              </Button>
+              <Button 
+                size="icon" 
+                variant="ghost" 
+                onClick={handleRedo} 
+                disabled={!canRedo}
+                title="Redo"
+              >
+                <Redo className="h-4 w-4" />
+              </Button>
+            </>
+          )}
         </div>
         <div className="flex items-center gap-1">
           <Button
@@ -156,6 +216,11 @@ export const BpmnViewer = ({ xml, onXmlChange, className }: BpmnViewerProps) => 
               </>
             )}
           </Button>
+          {isEditing && onXmlChange && (
+            <Button size="sm" variant="secondary" onClick={handleSaveChanges} className="gap-2">
+              Save Changes
+            </Button>
+          )}
           <Button size="sm" variant="outline" onClick={handleDownload} className="gap-2">
             <Download className="h-4 w-4" />
             Download
@@ -170,7 +235,10 @@ export const BpmnViewer = ({ xml, onXmlChange, className }: BpmnViewerProps) => 
             <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
           </div>
         )}
-        <div ref={containerRef} className="bpmn-container h-full w-full" />
+        <div 
+          ref={containerRef} 
+          className={cn('bpmn-container h-full w-full', !isEditing && 'view-mode')} 
+        />
       </div>
     </div>
   );
